@@ -37,7 +37,7 @@ run_mode_t parse_args(int argc, char **argv)
     exit(EXIT_FAILURE);
 }
 
-static int handle_open_interrupt(void)
+static int handle_open_signals(void)
 {
     if (got_sigterm) {
         got_sigterm = 0;
@@ -95,7 +95,7 @@ static int handle_open_interrupt(void)
     return 0;
 }
 
-static int handle_read_interrupt(int fd, int *exit_after_current_writer)
+static int handle_read_signals(int fd, int *exit_after_current_writer)
 {
     if (got_sigterm) {
         got_sigterm = 0;
@@ -139,11 +139,13 @@ static int handle_read_interrupt(int fd, int *exit_after_current_writer)
 
         if (daemonize() == -1) {
             fprintf(stderr, "daemonize failed\n");
+            close(fd);
             return -1;
         }
 
         if (setup_logging(DAEMON, LOG_PATH) == -1) {
             fprintf(stderr, "setup_logging after daemonize failed\n");
+            close(fd);
             return -1;
         }
 
@@ -160,6 +162,12 @@ int run_fifo_loop(const char *fifo_path)
     int exit_after_current_writer = 0;
 
     while (1) {
+        int action = handle_open_signals();
+
+        if (action != 0) {
+            return action > 0 ? 0 : -1;
+        }
+
         printf("waiting for writer...\n");
         fflush(stdout);
 
@@ -167,7 +175,7 @@ int run_fifo_loop(const char *fifo_path)
 
         if (fd == -1) {
             if (errno == EINTR) {
-                int action = handle_open_interrupt();
+                action = handle_open_signals();
 
                 if (action != 0) {
                     return action > 0 ? 0 : -1;
@@ -183,6 +191,12 @@ int run_fifo_loop(const char *fifo_path)
         printf("writer connected\n");
 
         while (1) {
+            action = handle_read_signals(fd, &exit_after_current_writer);
+
+            if (action != 0) {
+                return action > 0 ? 0 : -1;
+            }
+
             ssize_t n = read(fd, buf, BUF_SIZE - 1);
 
             if (n > 0) {
@@ -204,7 +218,7 @@ int run_fifo_loop(const char *fifo_path)
             }
 
             if (errno == EINTR) {
-                int action = handle_read_interrupt(fd, &exit_after_current_writer);
+                action = handle_read_signals(fd, &exit_after_current_writer);
 
                 if (action != 0) {
                     return action > 0 ? 0 : -1;
